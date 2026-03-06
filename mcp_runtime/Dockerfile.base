@@ -1,0 +1,27 @@
+# Base image for all aMaze MCP server containers.
+#
+# MCP server images extend this:
+#
+#   FROM amaze/mcp-base:dev
+#   COPY . /mcp
+#   ENV MCP_SERVER_NAME=my-tool
+#   ENV MCP_SERVER_HOST=mcp-my-tool
+#   ENV MCP_SERVER_PORT=8090
+#   CMD ["python", "/mcp/main.py"]
+#
+# The bootstrap module auto-registers this server with the Registry on startup.
+
+FROM python:3.12-slim
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+WORKDIR /runtime
+COPY mcp_runtime/pyproject.toml ./
+COPY mcp_runtime/src/ ./src/
+RUN uv pip install --system -e .
+
+WORKDIR /mcp
+EXPOSE 8090

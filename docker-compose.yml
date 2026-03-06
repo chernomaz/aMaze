@@ -1,0 +1,315 @@
+name: amaze
+
+networks:
+  # UI can reach API Gateway; nothing else
+  amaze-frontend:
+    driver: bridge
+
+  # All platform services talk to each other; no external internet
+  amaze-internal:
+    driver: bridge
+    internal: true
+
+  # Agent containers can ONLY reach the proxy
+  amaze-agent-net:
+    driver: bridge
+    internal: true
+
+  # MCP containers can ONLY reach the proxy
+  amaze-mcp-net:
+    driver: bridge
+    internal: true
+
+volumes:
+  postgres-data:
+  redis-data:
+  agent-workspaces:
+
+services:
+
+  # ─── Infrastructure ────────────────────────────────────────────────────────
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    networks: [amaze-internal]
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres/init.sql:/docker-entrypoint-initdb.d/01-init.sql
+      - ./docker/postgres/seed.sql:/docker-entrypoint-initdb.d/02-seed.sql
+    environment:
+      POSTGRES_DB: amaze
+      POSTGRES_USER: amaze
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-amaze_dev_password}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U amaze -d amaze"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    networks: [amaze-internal]
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # ─── Platform Services ─────────────────────────────────────────────────────
+
+  api_gateway:
+    build:
+      context: .
+      dockerfile: services/api_gateway/Dockerfile
+    restart: unless-stopped
+    networks: [amaze-frontend, amaze-internal]
+    ports:
+      - "8000:8000"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://amaze:${POSTGRES_PASSWORD:-amaze_dev_password}@postgres/amaze
+      REDIS_URL: redis://redis:6379
+      ORCHESTRATOR_URL: http://orchestrator:8001
+      REGISTRY_URL: http://registry:8002
+      POLICY_ENGINE_URL: http://policy_engine:8003
+      SECRET_KEY: ${SECRET_KEY:-dev_secret_key_change_in_production}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    develop:
+      watch:
+        - action: sync
+          path: ./services/api_gateway/src
+          target: /app/src
+
+  orchestrator:
+    build:
+      context: .
+      dockerfile: services/orchestrator/Dockerfile
+    restart: unless-stopped
+    networks: [amaze-internal]
+    ports:
+      - "8001:8001"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://amaze:${POSTGRES_PASSWORD:-amaze_dev_password}@postgres/amaze
+      REDIS_URL: redis://redis:6379
+      PROXY_INTERNAL_URL: http://proxy:8080
+      # Path on the HOST where agent workspaces are created.
+      # Must match what is mounted into this container.
+      AGENT_WORKSPACE_HOST_PATH: ${AGENT_WORKSPACE_HOST_PATH:-/tmp/amaze-workspaces}
+      AGENT_WORKSPACE_CONTAINER_PATH: /agent-workspaces
+      AMAZE_DOCKER_NETWORK: amaze_amaze-agent-net
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - agent-workspaces:/agent-workspaces
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    develop:
+      watch:
+        - action: sync
+          path: ./services/orchestrator/src
+          target: /app/src
+
+  proxy:
+    build:
+      context: .
+      dockerfile: services/proxy/Dockerfile
+    restart: unless-stopped
+    networks: [amaze-internal, amaze-agent-net, amaze-mcp-net]
+    ports:
+      - "8080:8080"   # exposed for dev debugging; remove in production
+    environment:
+      REDIS_URL: redis://redis:6379
+      POLICY_ENGINE_URL: http://policy_engine:8003
+      REGISTRY_URL: http://registry:8002
+      ORCHESTRATOR_URL: http://orchestrator:8001
+      DATABASE_URL: postgresql+asyncpg://amaze:${POSTGRES_PASSWORD:-amaze_dev_password}@postgres/amaze
+    depends_on:
+      redis:
+        condition: service_healthy
+      policy_engine:
+        condition: service_started
+      registry:
+        condition: service_started
+    develop:
+      watch:
+        - action: sync
+          path: ./services/proxy/src
+          target: /app/src
+
+  registry:
+    build:
+      context: .
+      dockerfile: services/registry/Dockerfile
+    restart: unless-stopped
+    networks: [amaze-internal]
+    ports:
+      - "8002:8002"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://amaze:${POSTGRES_PASSWORD:-amaze_dev_password}@postgres/amaze
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    develop:
+      watch:
+        - action: sync
+          path: ./services/registry/src
+          target: /app/src
+
+  policy_engine:
+    build:
+      context: .
+      dockerfile: services/policy_engine/Dockerfile
+    restart: unless-stopped
+    networks: [amaze-internal]
+    ports:
+      - "8003:8003"
+    environment:
+      DATABASE_URL: postgresql+asyncpg://amaze:${POSTGRES_PASSWORD:-amaze_dev_password}@postgres/amaze
+      REDIS_URL: redis://redis:6379
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    develop:
+      watch:
+        - action: sync
+          path: ./services/policy_engine/src
+          target: /app/src
+
+  ui:
+    build:
+      context: ./services/ui
+      dockerfile: Dockerfile
+      # UI uses its own context since it's a Node project with no shared Python deps
+    restart: unless-stopped
+    networks: [amaze-frontend]
+    ports:
+      - "3000:3000"
+    environment:
+      VITE_API_BASE_URL: http://localhost:8000
+      VITE_WS_BASE_URL: ws://localhost:8000
+    depends_on:
+      - api_gateway
+    develop:
+      watch:
+        - action: sync
+          path: ./services/ui/src
+          target: /app/src
+        - action: rebuild
+          path: ./services/ui/package.json
+
+  # ─── Example MCP Containers ───────────────────────────────────────────────
+  # Profile: examples — run with: docker compose --profile examples up
+
+  mcp-filesystem:
+    build:
+      context: ./examples/mcp/filesystem
+      dockerfile: Dockerfile
+    profiles: [examples]
+    restart: unless-stopped
+    networks: [amaze-mcp-net]
+    volumes:
+      - agent-workspaces:/workspace:rw
+    environment:
+      AMAZE_REGISTRY_URL: http://proxy:8080/registry
+      MCP_SERVER_NAME: filesystem-mcp
+      MCP_SERVER_HOST: mcp-filesystem
+      MCP_SERVER_PORT: "8090"
+
+  mcp-websearch:
+    build:
+      context: ./examples/mcp/websearch
+      dockerfile: Dockerfile
+    profiles: [examples]
+    restart: unless-stopped
+    networks: [amaze-mcp-net]
+    environment:
+      AMAZE_REGISTRY_URL: http://proxy:8080/registry
+      MCP_SERVER_NAME: websearch-mcp
+      MCP_SERVER_HOST: mcp-websearch
+      MCP_SERVER_PORT: "8090"
+
+  mcp-calculator:
+    build:
+      context: ./examples/mcp/calculator
+      dockerfile: Dockerfile
+    profiles: [examples]
+    restart: unless-stopped
+    networks: [amaze-mcp-net]
+    environment:
+      AMAZE_REGISTRY_URL: http://proxy:8080/registry
+      MCP_SERVER_NAME: calculator-mcp
+      MCP_SERVER_HOST: mcp-calculator
+      MCP_SERVER_PORT: "8090"
+
+  mcp-counter:
+    build:
+      context: ./examples/mcp/counter
+      dockerfile: Dockerfile
+    profiles: [examples]
+    restart: unless-stopped
+    networks: [amaze-mcp-net]
+    environment:
+      AMAZE_REGISTRY_URL: http://proxy:8080/registry
+      MCP_SERVER_NAME: counter-mcp
+      MCP_SERVER_HOST: mcp-counter
+      MCP_SERVER_PORT: "8090"
+
+  # ─── Example Agent Containers ─────────────────────────────────────────────
+  # Agents are NOT started via docker-compose — the Orchestrator spawns them
+  # per session. These build targets exist for docker build only.
+  # Build all with: docker compose build echo-agent summarizer-agent researcher-agent reviewer-agent
+
+  echo-agent:
+    build:
+      context: ./examples/agents/echo
+      dockerfile: Dockerfile
+    profiles: [build-only]
+    networks: [amaze-agent-net]
+
+  summarizer-agent:
+    build:
+      context: ./examples/agents/summarizer
+      dockerfile: Dockerfile
+    profiles: [build-only]
+    networks: [amaze-agent-net]
+    environment:
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://95.173.102.50:8000/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-RBAC-LLM}
+      LLM_MODEL: ${LLM_MODEL:-Qwen/Qwen2.5-32B-Instruct}
+
+  researcher-agent:
+    build:
+      context: ./examples/agents/researcher
+      dockerfile: Dockerfile
+    profiles: [build-only]
+    networks: [amaze-agent-net]
+    environment:
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://95.173.102.50:8000/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-RBAC-LLM}
+      LLM_MODEL: ${LLM_MODEL:-Qwen/Qwen2.5-32B-Instruct}
+
+  reviewer-agent:
+    build:
+      context: ./examples/agents/reviewer
+      dockerfile: Dockerfile
+    profiles: [build-only]
+    networks: [amaze-agent-net]
+    environment:
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://95.173.102.50:8000/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-RBAC-LLM}
+      LLM_MODEL: ${LLM_MODEL:-Qwen/Qwen2.5-32B-Instruct}

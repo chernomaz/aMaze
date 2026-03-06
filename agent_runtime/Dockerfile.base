@@ -1,0 +1,28 @@
+# Base image for all aMaze agent containers.
+# Agent images extend this with their own code:
+#
+#   FROM amaze/agent-base:dev
+#   COPY . /agent
+#   CMD ["uv", "run", "fastapi", "run", "/agent/main.py", "--port", "8090"]
+#
+# The HTTP_PROXY / HTTPS_PROXY environment variables are injected by the
+# Orchestrator at container start — agents do NOT need to set these.
+
+FROM python:3.12-slim
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Install the agent_runtime package (provides amaze_client, mcp_client helpers)
+WORKDIR /runtime
+COPY agent_runtime/pyproject.toml ./
+COPY agent_runtime/src/ ./src/
+RUN uv pip install --system -e .
+
+# Default working directory for agent code
+WORKDIR /agent
+
+# Port agents expose for the POST /invoke contract
+EXPOSE 8090

@@ -1,0 +1,30 @@
+[project]
+name = "amaze-api-gateway"
+version = "0.1.0"
+description = "aMaze API gateway — REST + WebSocket facade for the UI"
+requires-python = ">=3.12"
+dependencies = [
+    "amaze-shared",
+    "fastapi[standard]>=0.115",
+    "sqlalchemy>=2.0",
+    "asyncpg>=0.29",
+    "redis>=5.0",
+    "httpx>=0.27",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/api_gateway"]
+
+[tool.uv.sources]
+amaze-shared = { workspace = true }
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24",
+    "httpx>=0.27",
+]

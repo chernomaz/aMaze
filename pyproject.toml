@@ -1,0 +1,19 @@
+[tool.uv.workspace]
+members = [
+    "shared",
+    "services/api_gateway",
+    "services/orchestrator",
+    "services/proxy",
+    "services/registry",
+    "services/policy_engine",
+    "agent_runtime",
+    "mcp_runtime",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
