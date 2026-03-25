@@ -35,7 +35,7 @@ import { Switch } from '@/components/ui/switch'
 
 const STATUS_COLORS: Record<string, 'default' | 'success' | 'destructive' | 'warning'> = {
   active: 'success',
-  inactive: 'secondary',
+  inactive: 'default',
   error: 'destructive',
   running: 'default',
 }
@@ -267,7 +267,7 @@ export default function AgentsPage() {
               </div>
               <div className="space-y-1.5">
                 <Label>Policy</Label>
-                <Select value={form.policy_id} onValueChange={(v) => setForm((f) => ({ ...f, policy_id: v === '_none' ? '' : v })}>
+                <Select value={form.policy_id} onValueChange={(v) => setForm((f) => ({ ...f, policy_id: v === '_none' ? '' : v }))}>
                   <SelectTrigger><SelectValue placeholder="None" /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="_none">None</SelectItem>

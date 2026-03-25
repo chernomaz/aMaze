@@ -71,7 +71,7 @@ export default function SessionsPage() {
       <div className="mb-6 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold">Sessions</h1>
-          <p className="text-sm text-muted-foreground">Launch and monitor agent execution sessions</p>
+          <p className="text-sm text-muted-foreground">Send prompts to running agents and monitor execution</p>
         </div>
         <Button onClick={() => { setForm({ agent_id: '', policy_id: '', execution_graph_id: null, initial_prompt: '' }); setError(''); setOpen(true) }}>
           <Plus className="h-4 w-4" /> New Session
@@ -83,7 +83,7 @@ export default function SessionsPage() {
       ) : sessions.length === 0 ? (
         <div className="flex flex-col items-center justify-center gap-3 py-16 text-muted-foreground">
           <Play className="h-12 w-12 opacity-30" />
-          <p>No sessions yet. Start one to run an agent.</p>
+          <p>No sessions yet. Make sure your agent container is running, then send a prompt.</p>
         </div>
       ) : (
         <Table>

@@ -32,7 +32,7 @@ async def session_stream(websocket: WebSocket, session_id: UUID):
 
     try:
         # Send a connected confirmation
-        await websocket.send_json({"type": "connected", "session_id": str(session_id)})
+        await websocket.send_json({"event_type": "connected", "session_id": str(session_id)})
 
         async def reader():
             async for message in pubsub.listen():

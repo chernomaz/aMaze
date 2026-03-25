@@ -15,7 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+  Dialog, DialogContent,
 } from '@/components/ui/dialog'
 import {
   Table, TableHeader, TableBody, TableRow, TableHead, TableCell,

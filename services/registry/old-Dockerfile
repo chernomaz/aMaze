@@ -1,0 +1,22 @@
+FROM python:3.12-slim
+
+COPY --from=ghcr.io/astral-sh/uv:latest /uv /usr/local/bin/uv
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PATH="/app/.venv/bin:$PATH"
+
+WORKDIR /app
+
+# Copy workspace config and relevant packages
+COPY pyproject.toml ./
+COPY shared/ ./shared/
+COPY services/registry/ ./services/registry/
+
+# Install only this service's dependencies
+RUN uv sync --package amaze-registry --no-dev
+
+EXPOSE 8002
+
+CMD ["fastapi", "run", "services/registry/src/registry/main.py", \
+     "--host", "0.0.0.0", "--port", "8002"]

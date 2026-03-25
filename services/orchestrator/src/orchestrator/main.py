@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -5,6 +6,7 @@ from uuid import UUID
 
 from fastapi import Request
 
+import httpx
 import redis.asyncio as aioredis
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
@@ -69,10 +71,50 @@ class SessionResponse(BaseModel):
 # ─── Routes ───────────────────────────────────────────────────────────────────
 
 
-@app.post("/sessions", response_model=SessionResponse, status_code=201)
-async def create_session(body: SessionCreateRequest):
+async def _run_agent(agent_name: str, session_id: UUID, initial_prompt: str) -> None:
+    """Background task: invoke the pre-running agent container and finalize the session."""
+    try:
+        async with httpx.AsyncClient(timeout=300) as client:
+            resp = await client.post(
+                f"http://{agent_name}:8090/invoke",
+                json={"task": initial_prompt},
+            )
+            resp.raise_for_status()
+            result = resp.json()
+            final_output = result.get("output", "")
+            new_status = SessionStatus.COMPLETED
+    except Exception as exc:
+        logger.error("Agent invocation failed for session %s: %s", session_id, exc)
+        final_output = str(exc)
+        new_status = SessionStatus.FAILED
+
+    # Finalize session in DB
     redis = get_redis()
     async with SessionFactory() as db:
+        try:
+            session = await db.get(Session, session_id)
+            if session and session.status == SessionStatus.RUNNING:
+                await session_manager.stop_session(
+                    db=db,
+                    redis=redis,
+                    session=session,
+                    new_status=new_status,
+                )
+                session.final_output = final_output
+                await db.commit()
+        finally:
+            await redis.aclose()
+
+
+@app.post("/sessions", response_model=SessionResponse, status_code=201)
+async def create_session(body: SessionCreateRequest):
+    from amaze_shared.models.agent import AgentDefinition
+    redis = get_redis()
+    async with SessionFactory() as db:
+        agent = await db.get(AgentDefinition, body.agent_id)
+        if not agent:
+            raise HTTPException(status_code=404, detail="Agent not found")
+        agent_name = agent.name
         try:
             session = await session_manager.start_session(
                 db=db,
@@ -88,6 +130,11 @@ async def create_session(body: SessionCreateRequest):
             raise HTTPException(status_code=500, detail=str(e))
         finally:
             await redis.aclose()
+
+    # Fire-and-forget: send prompt to the pre-running agent
+    asyncio.create_task(
+        _run_agent(agent_name, session.id, body.initial_prompt)
+    )
     return session
 
 
@@ -182,6 +229,93 @@ async def invoke_agent(parent_session_id: UUID, request: Request):
             return resp.json()
         except _httpx.RequestError as e:
             raise HTTPException(status_code=503, detail=f"Child agent unreachable: {e}")
+
+
+class RemoteSessionCreateRequest(BaseModel):
+    agent_id: UUID
+    policy_id: UUID
+    execution_graph_id: UUID | None = None
+    initial_prompt: str = ""
+
+
+class RemoteSessionResponse(BaseModel):
+    session_id: UUID
+    token: str
+
+
+@app.post("/sessions/remote", response_model=RemoteSessionResponse, status_code=201)
+async def create_remote_session(body: RemoteSessionCreateRequest):
+    """
+    Create a session for an agent running on a remote host (not spawned as a local container).
+    Generates a token the agent must send as X-Amaze-Session-Token on every proxied request.
+    """
+    import secrets
+    import json
+
+    redis = get_redis()
+    async with SessionFactory() as db:
+        try:
+            from amaze_shared.models.agent import AgentDefinition
+            from amaze_shared.models.policy import Policy
+            from amaze_shared.models.session import Session, SessionStatus
+            from datetime import datetime, timezone
+
+            agent = await db.get(AgentDefinition, body.agent_id)
+            if not agent:
+                raise HTTPException(status_code=404, detail="Agent not found")
+
+            policy = await db.get(Policy, body.policy_id)
+            if not policy:
+                raise HTTPException(status_code=404, detail="Policy not found")
+
+            session = Session(
+                agent_id=body.agent_id,
+                policy_id=body.policy_id,
+                execution_graph_id=body.execution_graph_id,
+                initial_prompt=body.initial_prompt,
+                status=SessionStatus.RUNNING,
+                started_at=datetime.now(timezone.utc),
+            )
+            db.add(session)
+            await db.flush()
+
+            session_id = str(session.id)
+            token = secrets.token_urlsafe(32)
+
+            TTL = 86400
+            pipe = redis.pipeline()
+
+            pipe.setex(
+                f"session_token:{token}",
+                TTL,
+                json.dumps({"session_id": session_id, "agent_id": str(body.agent_id)}),
+            )
+            pipe.setex(f"session:{session_id}:remote_token", TTL, token)
+
+            policy_data = {
+                "id": str(policy.id),
+                "max_tokens_per_conversation": policy.max_tokens_per_conversation,
+                "max_tokens_per_turn": policy.max_tokens_per_turn,
+                "max_iterations": policy.max_iterations,
+                "max_agent_calls": policy.max_agent_calls,
+                "max_mcp_calls": policy.max_mcp_calls,
+                "allowed_tools": policy.allowed_tools,
+                "allowed_llm_providers": policy.allowed_llm_providers,
+                "allowed_mcp_servers": policy.allowed_mcp_servers,
+                "on_budget_exceeded": policy.on_budget_exceeded,
+                "on_loop_exceeded": policy.on_loop_exceeded,
+            }
+            pipe.setex(f"session:{session_id}:policy", TTL, json.dumps(policy_data))
+
+            for counter in ("tokens_used", "iterations_completed", "mcp_calls_made", "agent_calls_made"):
+                pipe.setex(f"session:{session_id}:{counter}", TTL, 0)
+
+            await pipe.execute()
+            await db.commit()
+
+            return RemoteSessionResponse(session_id=session.id, token=token)
+        finally:
+            await redis.aclose()
 
 
 @app.get("/health")

@@ -20,6 +20,11 @@ networks:
     driver: bridge
     internal: true
 
+  # Proxy-only egress network — gives the proxy external internet access
+  # to forward LLM calls to external providers
+  amaze-egress:
+    driver: bridge
+
 volumes:
   postgres-data:
   redis-data:
@@ -93,7 +98,7 @@ services:
       context: .
       dockerfile: services/orchestrator/Dockerfile
     restart: unless-stopped
-    networks: [amaze-internal]
+    networks: [amaze-internal, amaze-agent-net]
     ports:
       - "8001:8001"
     environment:
@@ -124,9 +129,13 @@ services:
       context: .
       dockerfile: services/proxy/Dockerfile
     restart: unless-stopped
-    networks: [amaze-internal, amaze-agent-net, amaze-mcp-net]
+    networks: [amaze-internal, amaze-agent-net, amaze-mcp-net, amaze-egress]
     ports:
       - "8080:8080"   # exposed for dev debugging; remove in production
+    ulimits:
+      nofile:
+        soft: 65536
+        hard: 65536
     environment:
       REDIS_URL: redis://redis:6379
       POLICY_ENGINE_URL: http://policy_engine:8003
@@ -150,8 +159,12 @@ services:
     build:
       context: .
       dockerfile: services/registry/Dockerfile
+      network: host
     restart: unless-stopped
     networks: [amaze-internal]
+    dns:
+      - 8.8.8.8
+      - 1.1.1.1
     ports:
       - "8002:8002"
     environment:
@@ -270,24 +283,36 @@ services:
       MCP_SERVER_PORT: "8090"
 
   # ─── Example Agent Containers ─────────────────────────────────────────────
-  # Agents are NOT started via docker-compose — the Orchestrator spawns them
-  # per session. These build targets exist for docker build only.
-  # Build all with: docker compose build echo-agent summarizer-agent researcher-agent reviewer-agent
+  # Agents are long-lived services. Start them with:
+  #   docker compose --profile examples up
+  # Then create sessions from the UI — the Orchestrator sends prompts to them
+  # directly instead of spawning per-session containers.
 
   echo-agent:
     build:
       context: ./examples/agents/echo
       dockerfile: Dockerfile
-    profiles: [build-only]
+    profiles: [examples]
+    restart: unless-stopped
     networks: [amaze-agent-net]
+    environment:
+      HTTP_PROXY: http://proxy:8080
+      HTTPS_PROXY: http://proxy:8080
+      NO_PROXY: ""
+      AMAZE_PROXY_URL: http://proxy:8080
 
   summarizer-agent:
     build:
       context: ./examples/agents/summarizer
       dockerfile: Dockerfile
-    profiles: [build-only]
+    profiles: [examples]
+    restart: unless-stopped
     networks: [amaze-agent-net]
     environment:
+      HTTP_PROXY: http://proxy:8080
+      HTTPS_PROXY: http://proxy:8080
+      NO_PROXY: ""
+      AMAZE_PROXY_URL: http://proxy:8080
       LLM_BASE_URL: ${LLM_BASE_URL:-http://95.173.102.50:8000/v1}
       LLM_API_KEY: ${LLM_API_KEY:-RBAC-LLM}
       LLM_MODEL: ${LLM_MODEL:-Qwen/Qwen2.5-32B-Instruct}
@@ -296,9 +321,14 @@ services:
     build:
       context: ./examples/agents/researcher
       dockerfile: Dockerfile
-    profiles: [build-only]
+    profiles: [examples]
+    restart: unless-stopped
     networks: [amaze-agent-net]
     environment:
+      HTTP_PROXY: http://proxy:8080
+      HTTPS_PROXY: http://proxy:8080
+      NO_PROXY: ""
+      AMAZE_PROXY_URL: http://proxy:8080
       LLM_BASE_URL: ${LLM_BASE_URL:-http://95.173.102.50:8000/v1}
       LLM_API_KEY: ${LLM_API_KEY:-RBAC-LLM}
       LLM_MODEL: ${LLM_MODEL:-Qwen/Qwen2.5-32B-Instruct}
@@ -307,9 +337,14 @@ services:
     build:
       context: ./examples/agents/reviewer
       dockerfile: Dockerfile
-    profiles: [build-only]
+    profiles: [examples]
+    restart: unless-stopped
     networks: [amaze-agent-net]
     environment:
+      HTTP_PROXY: http://proxy:8080
+      HTTPS_PROXY: http://proxy:8080
+      NO_PROXY: ""
+      AMAZE_PROXY_URL: http://proxy:8080
       LLM_BASE_URL: ${LLM_BASE_URL:-http://95.173.102.50:8000/v1}
       LLM_API_KEY: ${LLM_API_KEY:-RBAC-LLM}
       LLM_MODEL: ${LLM_MODEL:-Qwen/Qwen2.5-32B-Instruct}

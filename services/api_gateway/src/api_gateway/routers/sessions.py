@@ -1,4 +1,5 @@
 import os
+from datetime import datetime
 from uuid import UUID
 
 import httpx
@@ -30,7 +31,7 @@ class SessionEventResponse(BaseModel):
     payload: dict
     tokens_delta: int
     step_id: int | None
-    timestamp: str
+    timestamp: datetime
 
     model_config = {"from_attributes": True}
 
@@ -48,7 +49,7 @@ class SessionResponse(BaseModel):
     iterations_completed: int
     mcp_calls_made: int
     agent_calls_made: int
-    created_at: str
+    created_at: datetime
 
     model_config = {"from_attributes": True}
 
@@ -105,6 +106,41 @@ async def create_session(body: SessionCreate, db: DB):
     if not session:
         raise HTTPException(status_code=500, detail="Session created but not found in DB")
     return session
+
+
+class RemoteSessionCreate(BaseModel):
+    agent_id: UUID
+    policy_id: UUID
+    execution_graph_id: UUID | None = None
+    initial_prompt: str = ""
+
+
+class RemoteSessionResponse(BaseModel):
+    session_id: UUID
+    token: str  # pass as X-Amaze-Session-Token on every proxied request
+
+
+@router.post("/remote", response_model=RemoteSessionResponse, status_code=201)
+async def create_remote_session(body: RemoteSessionCreate):
+    """
+    Create a session for a remote agent (not spawned by the orchestrator).
+    Delegates to the Orchestrator, which owns all session lifecycle and Redis state.
+    Returns a token the agent must include as X-Amaze-Session-Token on every
+    outbound request routed through the proxy.
+    """
+    async with httpx.AsyncClient(timeout=30) as client:
+        try:
+            resp = await client.post(
+                f"{ORCHESTRATOR_URL}/sessions/remote",
+                json=body.model_dump(mode="json"),
+            )
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=503, detail=f"Orchestrator unavailable: {e}")
+
+    return RemoteSessionResponse(**resp.json())
 
 
 @router.delete("/{session_id}", status_code=204)

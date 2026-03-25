@@ -43,15 +43,16 @@ class RegistryClient:
             "output_schema": output_schema,
         }
         self._registry_url = REGISTRY_URL
+        # Persistent client reuses connections — prevents fd exhaustion on heartbeat loop
+        self._client = httpx.Client(timeout=10)
 
     def register(self, retries: int = 5, backoff: float = 2.0) -> None:
         """Register with the Registry. Retries on failure (registry may not be up yet)."""
         for attempt in range(1, retries + 1):
             try:
-                resp = httpx.post(
+                resp = self._client.post(
                     f"{self._registry_url}/register",
                     json=self.payload,
-                    timeout=10,
                 )
                 resp.raise_for_status()
                 logger.info("Registered '%s' with aMaze Registry", self.name)
@@ -68,7 +69,7 @@ class RegistryClient:
     def heartbeat(self) -> None:
         """Send a heartbeat to keep the entry marked healthy."""
         try:
-            httpx.post(
+            self._client.post(
                 f"{self._registry_url}/heartbeat/{self.name}",
                 timeout=5,
             )

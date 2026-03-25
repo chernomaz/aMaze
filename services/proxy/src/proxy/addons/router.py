@@ -69,11 +69,19 @@ class UpstreamRouter:
             return
 
         host = flow.request.pretty_host
+        path = flow.request.path
+
+        # MCP containers call http://proxy:8080/registry/... directly (not via amaze-gateway).
+        # Rewrite to registry service immediately to avoid the proxy forwarding to itself.
+        if host != AMAZE_GATEWAY_HOST and path.startswith("/registry/"):
+            registry_path = path[len("/registry"):]
+            flow.request.url = f"http://registry:8002{registry_path}"
+            return
+
         if host != AMAZE_GATEWAY_HOST:
             # LLM calls and other traffic: pass through unchanged
             return
 
-        path = flow.request.path
         call_type = flow.metadata.get("call_type")
 
         # --- Registry passthrough ---

@@ -12,6 +12,7 @@ Coordinates between DB, Redis, and Docker:
 
 import json
 import logging
+import socket
 from datetime import datetime, timezone
 from uuid import UUID
 
@@ -70,35 +71,13 @@ async def start_session(
 
     session_id = str(session.id)
 
-    # ── Build mount list for container_manager ────────────────────────────────
-    mounts = [
-        {
-            "host_path": m.host_path,
-            "container_path": m.container_path,
-            "read_only": m.read_only,
-        }
-        for m in agent.mounts
-    ]
-
-    # ── Spawn container (synchronous Docker SDK call — run in thread pool) ────
+    # ── Resolve agent hostname to IP for proxy session mapping ────────────────
     try:
-        import asyncio
-        container_id, container_name, container_ip = await asyncio.get_event_loop().run_in_executor(
-            None,
-            lambda: container_manager.spawn_agent_container(
-                session_id=session_id,
-                agent_id=str(agent_id),
-                image=agent.image,
-                env_vars=agent.env_vars,
-                mounts=mounts,
-                mem_limit=agent.mem_limit,
-                cpu_quota=agent.cpu_quota,
-            ),
-        )
-    except Exception as exc:
+        container_ip = socket.gethostbyname(agent.name)
+    except socket.gaierror as exc:
         session.status = SessionStatus.FAILED
         await db.commit()
-        raise RuntimeError(f"Failed to spawn container: {exc}") from exc
+        raise RuntimeError(f"Agent '{agent.name}' not reachable: {exc}") from exc
 
     # ── Register IP → session in Redis ────────────────────────────────────────
     ip_key = f"agent_ip:{container_ip}"
@@ -164,14 +143,12 @@ async def start_session(
     await pipe.execute()
 
     # ── Update session in DB ──────────────────────────────────────────────────
-    session.container_id = container_id
-    session.container_name = container_name
     session.status = SessionStatus.RUNNING
     session.started_at = datetime.now(timezone.utc)
     await db.commit()
     await db.refresh(session)
 
-    logger.info("Session %s started (container=%s ip=%s)", session_id, container_name, container_ip)
+    logger.info("Session %s started (agent=%s ip=%s)", session_id, agent.name, container_ip)
     return session
 
 
@@ -207,9 +184,13 @@ async def stop_session(
     await db.commit()
 
     # ── Clean up Redis ────────────────────────────────────────────────────────
+    # Remove remote token if this was a remote session
+    remote_token = await redis.get(f"session:{session_id}:remote_token")
+    if remote_token:
+        await redis.delete(f"session_token:{remote_token}")
+
     # Gather all session keys to delete
     keys = await redis.keys(f"session:{session_id}:*")
-    # Remove IP mapping (need to look it up from agent info)
     if keys:
         await redis.delete(*keys)
 

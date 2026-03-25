@@ -47,13 +47,26 @@ class SessionIdentifier:
             flow.metadata["client_ip"] = client_ip
             return
 
-        # No session found — check if it's an allowed registry pass-through
-        host = flow.request.pretty_host
+        # No session found — check for token-based auth (remote agents).
+        token = flow.request.headers.get("X-Amaze-Session-Token")
+        if token:
+            raw = r.get(f"session_token:{token}")
+            if raw:
+                info = json.loads(raw)
+                flow.metadata["session_id"] = info["session_id"]
+                flow.metadata["agent_id"] = info["agent_id"]
+                flow.metadata["client_ip"] = client_ip
+                logger.debug("Token-auth session %s from %s", info["session_id"], client_ip)
+                return
+            logger.warning("Invalid session token from %s", client_ip)
+
+        # No session found — check if it's an allowed registry pass-through.
+        # MCP containers call proxy:8080/registry/... directly (not via amaze-gateway),
+        # so we check path only — no host restriction needed since amaze-mcp-net
+        # is internal and can only reach the proxy anyway.
         path = flow.request.path
 
-        if host == AMAZE_GATEWAY_HOST and any(
-            path.startswith(p) for p in REGISTRY_PASSTHROUGH_PATHS
-        ):
+        if any(path.startswith(p) for p in REGISTRY_PASSTHROUGH_PATHS):
             # MCP container self-registering — allow, mark as passthrough
             flow.metadata["session_id"] = None
             flow.metadata["is_registry_passthrough"] = True
