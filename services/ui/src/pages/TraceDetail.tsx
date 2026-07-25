@@ -232,6 +232,62 @@ function EdgesTable({
                           PII redacted
                         </span>
                       )}
+                      {(() => {
+                        // S9: "N tools hidden" chip on tools/list spans.
+                        // tools_filtered is "N/M" (before/after); render
+                        // only when a positive delta actually occurred.
+                        const raw = e.tools_filtered || ''
+                        if (!raw.includes('/')) return null
+                        const [b, a] = raw.split('/').map((v) => parseInt(v, 10))
+                        if (!isFinite(b) || !isFinite(a) || b <= a) return null
+                        const hidden = b - a
+                        return (
+                          <span
+                            title={`tools/list: agent received ${a} of ${b} tools (${hidden} hidden by policy.allowed_tools)`}
+                            style={{
+                              padding: '1px 6px',
+                              borderRadius: 999,
+                              fontSize: 10,
+                              fontWeight: 700,
+                              letterSpacing: '0.2px',
+                              background: 'rgba(6,182,212,0.15)',
+                              color: 'var(--cyan)',
+                              border: '1px solid rgba(6,182,212,0.3)',
+                            }}
+                          >
+                            {hidden} tool{hidden === 1 ? '' : 's'} hidden
+                          </span>
+                        )
+                      })()}
+                      {(() => {
+                        // S9.1: "N tools stripped" chip on LLM spans where
+                        // LLMToolStripper reduced the outbound tools[]
+                        // array. llm_tools_stripped is "N/M" (before/after);
+                        // render only on llm edges with a positive delta.
+                        if (e.type !== 'llm') return null
+                        const raw = e.llm_tools_stripped || ''
+                        if (!raw.includes('/')) return null
+                        const [b, a] = raw.split('/').map((v) => parseInt(v, 10))
+                        if (!isFinite(b) || !isFinite(a) || b <= a) return null
+                        const stripped = b - a
+                        return (
+                          <span
+                            title={`LLM request: agent sent ${b} tools, proxy stripped ${stripped} not in policy.allowed_tools — model saw ${a}`}
+                            style={{
+                              padding: '1px 6px',
+                              borderRadius: 999,
+                              fontSize: 10,
+                              fontWeight: 700,
+                              letterSpacing: '0.2px',
+                              background: 'rgba(245,158,11,0.15)',
+                              color: 'var(--amber, #f59e0b)',
+                              border: '1px solid rgba(245,158,11,0.3)',
+                            }}
+                          >
+                            {stripped} tool{stripped === 1 ? '' : 's'} stripped
+                          </span>
+                        )
+                      })()}
                     </span>
                   </TableCell>
                   <TableCell style={{ fontSize: 12 }}>{e.indirect ? 'yes' : 'no'}</TableCell>

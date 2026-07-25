@@ -82,6 +82,14 @@ export interface TraceEdge {
   input: string
   output: string
   pii_redacted?: boolean
+  // S9: "N/M" (before/after) when tool_list_filter ran on this edge.
+  // Empty string when the filter wasn't applicable (any non-tools/list
+  // call, or a tools/list on an unpolicied agent).
+  tools_filtered?: string
+  // S9.1: "N/M" (before/after) when LLMToolStripper reduced the outbound
+  // tools[] array on this LLM edge. Empty string when the stripper
+  // didn't run or didn't reduce.
+  llm_tools_stripped?: string
 }
 
 export interface TraceViolation {

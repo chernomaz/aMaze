@@ -55,6 +55,14 @@ async def _build_agent():
 
 async def receive_message_from_user(q: Any) -> Any:
     _log(f"user message: {q!r}")
+    # S9.3: policy tool-set drift check. Push-driven (POST arrives on the
+    # SDK's /_amaze/tools_changed endpoint); we just check the flag here
+    # and decide what to do. Rebuild is the simplest reaction — swaps the
+    # compiled _agent for one bound to the current authoritative tools.
+    if amaze.is_tools_changed():
+        names = [t.get("name") for t in amaze.current_tools()]
+        _log(f"tools changed → {names} — rebuilding")
+        await _build_agent()
     if _agent is None:
         return "Agent not ready — please retry in a moment"
     try:
@@ -71,6 +79,7 @@ async def receive_message_from_user(q: Any) -> Any:
 
 async def receive_message_from_agent(caller: str, q: Any) -> Any:
     _log(f"A2A from {caller}: {q!r}")
+    # receive_message_from_user already does the drift check.
     return await receive_message_from_user(q)
 
 

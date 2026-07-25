@@ -69,12 +69,23 @@ async def _run_llm(task: str) -> str:
 
 async def receive_message_from_user(q: Any) -> Any:
     _log(f"user message: {q!r}")
+    await _refresh_if_changed()
     return await _dispatch(q)
 
 
 async def receive_message_from_agent(caller: str, q: Any) -> Any:
     _log(f"A2A message from {caller}: {q!r}")
+    await _refresh_if_changed()
     return await _dispatch(q)
+
+
+async def _refresh_if_changed() -> None:
+    # S9.3: policy tool-set drift check. Push-driven via
+    # POST /_amaze/tools_changed; rebuild is the simplest reaction.
+    if amaze.is_tools_changed():
+        names = [t.get("name") for t in amaze.current_tools()]
+        _log(f"tools changed → {names} — rebuilding")
+        await _build_agent()
 
 
 async def _dispatch(q: Any) -> Any:

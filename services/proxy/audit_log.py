@@ -591,6 +591,24 @@ class AuditLog:
             "pii_redacted":         "true" if flow.metadata.get("amaze_pii_redacted") else "false",
         }
 
+        # S9: surface tool_list_filter's before/after counts on tools/list
+        # spans. Populated by ToolListFilter.response only when a filter
+        # actually ran (before > 0). Redis Streams stores strings, so we
+        # encode as "N/M"; the UI splits on "/".
+        tlf = flow.metadata.get("amaze_tool_list_filtered")
+        if isinstance(tlf, dict):
+            before = int(tlf.get("before", 0))
+            after = int(tlf.get("after", 0))
+            record["tools_filtered"] = f"{before}/{after}"
+
+        # S9.1: same shape, but for LLMToolStripper on outbound LLM
+        # requests. Only set when the strip actually reduced the tool set.
+        lts = flow.metadata.get("amaze_llm_tools_stripped")
+        if isinstance(lts, dict):
+            before = int(lts.get("before", 0))
+            after = int(lts.get("after", 0))
+            record["llm_tools_stripped"] = f"{before}/{after}"
+
         try:
             r = await redis_client()
             await r.xadd(f"audit:{agent_id}", record)

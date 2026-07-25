@@ -67,6 +67,23 @@ export interface Policy {
 export interface PutPolicyResponse {
   updated: boolean
   agent_id: string
+  changed_fields: string[] // S9: which top-level Policy fields diverged
+}
+
+// S9: Tool-visibility endpoint. Shape:
+//   { server, visible: MCPTool[], hidden: MCPTool[] }
+// where MCPTool matches what the MCP server itself returned from tools/list.
+export interface MCPTool {
+  name: string
+  description?: string
+  inputSchema?: unknown
+  [k: string]: unknown
+}
+
+export interface ToolVisibility {
+  server: string
+  visible: MCPTool[]
+  hidden: MCPTool[]
 }
 
 // ---------------------------------------------------------------------------
@@ -82,4 +99,11 @@ export function putPolicy(agentId: string, policy: Policy) {
     method: 'PUT',
     body: JSON.stringify(policy),
   })
+}
+
+export function getToolVisibility(agentId: string, server: string) {
+  const qs = new URLSearchParams({ server }).toString()
+  return apiFetch<ToolVisibility>(
+    `/policy/${encodeURIComponent(agentId)}/tool-visibility?${qs}`,
+  )
 }

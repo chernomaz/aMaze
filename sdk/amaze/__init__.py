@@ -44,10 +44,17 @@ try:
 except Exception:
     pass
 
-from . import _a2a, _core, _handlers
+from . import _a2a, _core, _handlers, _tools_state
 from ._a2a import SendError
+from ._tools_state import current_tools, is_tools_changed
 
-__all__ = ["init", "send_message_to_agent", "SendError"]
+__all__ = [
+    "init",
+    "send_message_to_agent",
+    "SendError",
+    "is_tools_changed",
+    "current_tools",
+]
 
 
 def init(

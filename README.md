@@ -89,12 +89,31 @@ aMaze is multi-tenant. Humans log into the dashboard with a session cookie (bcry
 
 The default bootstrap admin is `admin` / `admin`; override it with `AMAZE_ADMIN_USER` / `AMAZE_ADMIN_PASSWORD` on the platform container.
 
+### Tool visibility
+
+Blocking a disallowed tool call is the last line of defence — by then the model has already read the tool's description and spent tokens deciding to call it. aMaze removes disallowed tools from the model's view entirely, at two boundaries:
+
+- **MCP discovery.** The proxy rewrites every `tools/list` response down to the agent's `allowed_tools`, so a tool the policy forbids never enters the agent's context. Its description can't influence the model's plan, and it can't be used as a prompt-injection surface.
+- **The LLM request itself.** Agent runtimes cache their tool schema at build time — LangChain, LangGraph, CrewAI and the OpenAI Agents SDK all bind tools when the agent is constructed. If the policy tightens afterwards, that cache is stale. The proxy strips the disallowed entries from the outbound `tools[]` array (OpenAI and Anthropic wire formats), so the model sees the current policy no matter what the runtime believes.
+
+When `allowed_tools` changes, the orchestrator pushes the new set — names *and* schemas — to the agent. The SDK exposes it as two functions and takes no further action:
+
+```python
+async def receive_message_from_user(msg):
+    if amaze.is_tools_changed():
+        await _build_agent()          # your build function, your call
+    return await _agent.ainvoke(...)
+```
+
+What happens next is the author's decision: rebuild the agent, swap a tool set behind LangChain `wrap_model_call` middleware, or ignore it. Ignoring it is safe — the proxy still filters the wire. The **Tool Visibility** panel on the policy page shows the visible/hidden split live as you edit, and trace rows are tagged when either filter fired.
+
 ### What you get
 
 | Capability | What it does |
 |---|---|
 | **A2A enforcement** | Control which agents can call which peers |
 | **MCP tool enforcement** | Allow/deny specific tools per MCP server |
+| **Tool visibility** | Disallowed tools are removed from `tools/list` *and* from the outbound LLM request — the model never sees descriptions for tools it can't use, even if the agent runtime cached them |
 | **LLM enforcement** | Allowlist providers, models, and token budgets |
 | **PII redaction** | Per-tool, per-parameter redaction of email / phone / CC / SSN / IP / URL / IBAN / person / location on both tool inputs and outputs — enforced in-flight by the proxy before payloads reach the tool or the agent. Powered by Presidio + spaCy NER |
 | **Execution graph** | Enforce tool/agent call ordering — strict or flexible mode |
@@ -116,6 +135,7 @@ The default bootstrap admin is `admin` / `admin`; override it with `AMAZE_ADMIN_
 | Enforcement location | Inside agent code | Proxy + policy engine — no agent changes |
 | Framework dependency | Often framework-specific | Works with anything that respects `HTTP_PROXY` |
 | MCP visibility | Usually partial | Every MCP call routed and governed |
+| Disallowed tools | Blocked at call time, after the model already read them | Removed from discovery *and* from the LLM request — never enter the model's context |
 | Remote agents | Often unmanaged | Registered, identified, and policy-bound |
 | Audit | Logs and traces | Decision evidence + traces + policy context |
 

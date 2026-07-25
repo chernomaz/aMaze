@@ -283,6 +283,11 @@ async def _register_agent(req: RegisterAgentRequest) -> RegisterAgentResponse:
 
     pipe = r.pipeline()
     pipe.setex(f"session_token:{bearer_token}", SESSION_TTL_SECONDS, req.agent_id)
+    # S9.3: reverse lookup used by the tools-changed push in
+    # PUT /policy/{agent_id}. Orchestrator needs to know the agent's bearer
+    # to echo it in X-Amaze-Bearer on the outbound push, so the SDK's
+    # push-receiver can authenticate.
+    pipe.setex(f"agent:{req.agent_id}:bearer_token", SESSION_TTL_SECONDS, bearer_token)
     pipe.setex(f"session:{session_id}:agent", SESSION_TTL_SECONDS, req.agent_id)
     pipe.setex(f"agent_session:{req.agent_id}", SESSION_TTL_SECONDS, session_id)
     if req.a2a_host:

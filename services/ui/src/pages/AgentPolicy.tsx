@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ArrowLeft, Plus, Trash2 } from 'lucide-react'
 
 import { listAgents } from '@/api/agents'
-import { listMcpServers } from '@/api/mcp'
+import { listMcpServers, type McpServer } from '@/api/mcp'
 import {
   getPolicy,
   putPolicy,
@@ -472,6 +472,7 @@ export default function AgentPolicy() {
 
       {/* Card 5: mode-conditional */}
       {draft.mode === 'flexible' ? (
+        <>
         <Card title="Allowed Capabilities" subtitle="Checklists below come from approved MCP servers and approved peer agents.">
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
             <Checklist
@@ -496,6 +497,11 @@ export default function AgentPolicy() {
             />
           </div>
         </Card>
+        <ToolVisibilityCard
+          servers={mcpQ.data ?? []}
+          allowed={draft.allowed_tools}
+        />
+        </>
       ) : (
         <Card title="Execution Graph" subtitle="Strict mode — every call must follow this ordered graph.">
           <div style={{ minHeight: 360 }}>
@@ -902,6 +908,150 @@ function ErrorBanner({ msg }: { msg: string }) {
       }}
     >
       {msg}
+    </div>
+  )
+}
+
+// S9: Tool Visibility preview. Pure client-side compute from the mcpQ
+// cache (approved MCP servers + their tool lists) and the draft's
+// allowed_tools. Updates live as the checklist above is toggled; no
+// backend round-trip. The orchestrator's
+// GET /policy/{id}/tool-visibility endpoint remains for CLI/API consumers
+// and for the ST-TV.7 system test that asserts the same answer end-to-end.
+function ToolVisibilityCard({
+  servers,
+  allowed,
+}: {
+  servers: McpServer[]
+  allowed: string[]
+}) {
+  const approved = useMemo(() => servers.filter((s) => s.approved), [servers])
+  const [selected, setSelected] = useState<string>('')
+
+  useEffect(() => {
+    if (approved.length === 0) return
+    if (!selected || !approved.some((s) => s.name === selected)) {
+      setSelected(approved[0].name)
+    }
+  }, [approved, selected])
+
+  const server = approved.find((s) => s.name === selected)
+  const allowedSet = useMemo(() => new Set(allowed), [allowed])
+  const visible = useMemo(
+    () => (server ? server.tools.filter((t) => allowedSet.has(t.name)) : []),
+    [server, allowedSet],
+  )
+  const hidden = useMemo(
+    () => (server ? server.tools.filter((t) => !allowedSet.has(t.name)) : []),
+    [server, allowedSet],
+  )
+
+  if (approved.length === 0) {
+    return (
+      <Card
+        title="Tool Visibility Preview"
+        subtitle="What this agent will see from tools/list, per S9 policy filter. Approve an MCP server on the MCP Servers page to enable."
+      >
+        <div style={{ fontSize: 12, color: 'var(--muted-raw)' }}>
+          No approved MCP servers.
+        </div>
+      </Card>
+    )
+  }
+
+  return (
+    <Card
+      title="Tool Visibility Preview"
+      subtitle="What this agent will see from tools/list. Toggle Allowed Tools above to see the split update."
+    >
+      <div style={{ marginBottom: 12 }}>
+        <label style={{ fontSize: 12, color: 'var(--muted-raw)', marginRight: 8 }}>
+          MCP Server:
+        </label>
+        <select
+          value={selected}
+          onChange={(e) => setSelected(e.target.value)}
+          style={{
+            background: 'var(--panel)',
+            color: 'var(--fg)',
+            border: '1px solid var(--line)',
+            borderRadius: 6,
+            padding: '4px 8px',
+            fontSize: 13,
+          }}
+        >
+          {approved.map((s) => (
+            <option key={s.name} value={s.name}>
+              {s.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
+        <ToolColumn
+          title={`Visible to agent (${visible.length})`}
+          accent="var(--cyan)"
+          tools={visible.map((t) => ({ name: t.name, description: '' }))}
+          emptyLabel="Nothing visible — no allowed_tools match this server."
+        />
+        <ToolColumn
+          title={`Hidden by policy (${hidden.length})`}
+          accent="var(--muted-raw)"
+          tools={hidden.map((t) => ({ name: t.name, description: '' }))}
+          emptyLabel="Nothing hidden — every tool on this server is allowed."
+        />
+      </div>
+    </Card>
+  )
+}
+
+function ToolColumn({
+  title,
+  accent,
+  tools,
+  emptyLabel,
+}: {
+  title: string
+  accent: string
+  tools: { name: string; description?: string }[]
+  emptyLabel: string
+}) {
+  return (
+    <div>
+      <div
+        style={{
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: '0.5px',
+          textTransform: 'uppercase',
+          color: accent,
+          marginBottom: 6,
+        }}
+      >
+        {title}
+      </div>
+      {tools.length === 0 ? (
+        <div style={{ fontSize: 12, color: 'var(--muted-raw)' }}>{emptyLabel}</div>
+      ) : (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+          {tools.map((t) => (
+            <div
+              key={t.name}
+              style={{
+                background: 'rgba(255,255,255,.02)',
+                border: '1px solid var(--line)',
+                borderRadius: 8,
+                padding: '6px 10px',
+                fontSize: 12,
+                fontFamily:
+                  'ui-monospace, SFMono-Regular, Menlo, Monaco, monospace',
+              }}
+            >
+              {t.name}
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

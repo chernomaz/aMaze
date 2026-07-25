@@ -52,6 +52,12 @@ async def _build_agent():
 
 async def receive_message_from_user(q: Any) -> Any:
     _log(f"user message: {q!r}")
+    # S9.3: policy tool-set drift check. Push-driven; we just look at the
+    # flag and rebuild if it fired.
+    if amaze.is_tools_changed():
+        names = [t.get("name") for t in amaze.current_tools()]
+        _log(f"tools changed → {names} — rebuilding")
+        await _build_agent()
     if _agent is None:
         return "Agent not ready — please retry in a moment"
     try:

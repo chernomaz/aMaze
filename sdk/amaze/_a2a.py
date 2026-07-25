@@ -22,7 +22,7 @@ import uvicorn
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
-from . import _core, _handlers
+from . import _core, _handlers, _tools_state
 
 
 # ── outbound client ─────────────────────────────────────────────────────────
@@ -201,6 +201,10 @@ def _chat_app(ready: threading.Event) -> FastAPI:
         # message so outbound LLM/MCP/A2A calls made by the user handler
         # inherit it (the handler is async, so the contextvar propagates to
         # awaited calls automatically). No header → None → never parked.
+        # S9.3: dropped the old policy_watcher poll here. Tools-changed
+        # signalling is now push-driven via POST /_amaze/tools_changed
+        # (below); author code reads amaze.is_tools_changed() /
+        # amaze.current_tools() from inside their handler.
         token = _core._debug_user.set(req.headers.get("X-Amaze-Debug-User") or None)
         try:
             reply = await _handlers.call_user_handler(msg)
@@ -212,6 +216,41 @@ def _chat_app(ready: threading.Event) -> FastAPI:
         finally:
             _core._debug_user.reset(token)
         return JSONResponse({"reply": reply})
+
+    @app.post("/_amaze/tools_changed")
+    async def tools_changed(req: Request) -> JSONResponse:
+        """S9.3 push receiver. The orchestrator POSTs here whenever
+        policy.allowed_tools diffs, with the new authoritative tool set
+        (names + schemas). Author code never sees this endpoint; it just
+        updates SDK-internal state that amaze.is_tools_changed() and
+        amaze.current_tools() surface.
+
+        Auth: bearer-echo — the caller must include the agent's own
+        X-Amaze-Bearer. Only the orchestrator (which issued it) and the
+        agent itself hold this token, so the check keeps random LAN
+        peers from injecting fake tool payloads.
+        """
+        expected = _core.cfg().bearer_token
+        got = req.headers.get("X-Amaze-Bearer") or ""
+        if not expected or got != expected:
+            return JSONResponse(
+                {"error": "unauthorized"},
+                status_code=HTTPStatus.UNAUTHORIZED,
+            )
+        try:
+            body = await req.json()
+        except Exception:
+            return JSONResponse(
+                {"error": "invalid-json"},
+                status_code=HTTPStatus.BAD_REQUEST,
+            )
+        if not isinstance(body, dict):
+            return JSONResponse(
+                {"error": "body-must-be-object"},
+                status_code=HTTPStatus.BAD_REQUEST,
+            )
+        _tools_state._apply_push(body)
+        return JSONResponse({"accepted": True})
 
     return app
 
@@ -260,6 +299,35 @@ def _a2a_app(ready: threading.Event) -> FastAPI:
     async def healthz() -> dict[str, str]:
         status = "RUNNING" if ready.is_set() else "PENDING"
         return {"status": status, "agent_id": _core.cfg().agent_id}
+
+    @app.post("/_amaze/tools_changed")
+    async def tools_changed_a2a(req: Request) -> JSONResponse:
+        """S9.3 push receiver — same as on the chat app, mounted here too
+        so A2A-only agents (no chat port) can still receive pushes. The
+        orchestrator uses `agent:{id}:endpoint` (A2A URL) as the target
+        because every agent has one; chat_endpoint is optional.
+        """
+        expected = _core.cfg().bearer_token
+        got = req.headers.get("X-Amaze-Bearer") or ""
+        if not expected or got != expected:
+            return JSONResponse(
+                {"error": "unauthorized"},
+                status_code=HTTPStatus.UNAUTHORIZED,
+            )
+        try:
+            body = await req.json()
+        except Exception:
+            return JSONResponse(
+                {"error": "invalid-json"},
+                status_code=HTTPStatus.BAD_REQUEST,
+            )
+        if not isinstance(body, dict):
+            return JSONResponse(
+                {"error": "body-must-be-object"},
+                status_code=HTTPStatus.BAD_REQUEST,
+            )
+        _tools_state._apply_push(body)
+        return JSONResponse({"accepted": True})
 
     @app.post("/")
     async def a2a(req: Request) -> JSONResponse:
@@ -331,6 +399,11 @@ def _a2a_app(ready: threading.Event) -> FastAPI:
             )
         caller_id = caller_raw
 
+        # S9.3: dropped the old policy_watcher poll on the A2A path.
+        # Tools-changed signalling is push-driven via
+        # POST /_amaze/tools_changed; author code reads
+        # amaze.is_tools_changed() / amaze.current_tools() inside their
+        # A2A handler if they want to react before dispatch.
         # Continue the originating user's debug session: the proxy re-injects
         # X-Amaze-Debug-User onto this inbound A2A request, so bind it for the
         # duration of the peer handler call. The handler is async, so the

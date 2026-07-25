@@ -525,6 +525,16 @@ async def assemble_trace(trace_id: str) -> dict[str, Any] | None:
             # A2A forward edge: output is shown on the paired a2a-return edge instead.
             "output": "" if kind == "a2a" else _truncate(r.get("output", ""), _OUTPUT_TRUNCATE),
             "pii_redacted": r.get("pii_redacted") == "true",
+            # S9: tools_filtered is "N/M" ("before/after") on tools/list
+            # audit records — set by ToolListFilter via
+            # amaze_tool_list_filtered metadata + audit_log serialization.
+            # Absent on every other record; UI treats as 0/0.
+            "tools_filtered": r.get("tools_filtered", ""),
+            # S9.1: llm_tools_stripped is "N/M" on LLM audit records where
+            # LLMToolStripper reduced the outbound tools[] array (agent's
+            # cache carried more tools than policy currently allows). UI
+            # renders a chip on LLM edges when M < N.
+            "llm_tools_stripped": r.get("llm_tools_stripped", ""),
         })
 
         # ---- violation row (denied, OR alerted-mode pass-with-alert) ----
