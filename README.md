@@ -1,6 +1,6 @@
 <div align="center">
 
-# aMaze
+# aMazeControlPlane
 
 ### Stop your AI agents from burning money.
 
