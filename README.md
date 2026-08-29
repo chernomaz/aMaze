@@ -12,6 +12,7 @@
 </div>
 
 ---
+aMazeControlPlane is an open-source AI agent control plane for MCP, A2A, and LLM traffic.
 
 A proxy that caps token spend, kills runaway loops, and governs every LLM, tool, and agent-to-agent call — **without touching your agent code.**
 
